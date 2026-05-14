@@ -98,7 +98,7 @@ Don't say "Let me search your iMessages..." then dump results. Just answer the q
 Tool:           iMessage_Search (via homelab-docs MCP)
 Input:          query: string (natural language)
 Output:         Top-8 semantic-search excerpts, raw markdown chunks
-Dataset id:     3ac5ae85-2731-4d4c-a4e6-5590838be62e (Dify, "iMessage")
+Dataset id:     bc4a6ec7-8f72-4309-961d-63fa91de18c7 (Dify, "iMessage")
 Refresh:        Manual via imessage-refresh skill
 Source:         BlueBubbles on Geoff's Mac (HSB, 192.168.68.73)
 Excludes:       3-5 digit shortcode senders (2FA / promos / delivery)

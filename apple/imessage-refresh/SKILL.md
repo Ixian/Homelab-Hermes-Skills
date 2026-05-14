@@ -18,7 +18,7 @@ The iMessage Dify dataset (used by `imessage-search`) is NOT automatically synce
 
 Two stages:
 1. **Export**: pull new messages from BlueBubbles (running on Geoff's Mac at `http://192.168.68.73:1234`) → write/append per-chat markdown files in `/home/hermes/.hermes/imessage-export/`. Incremental — only fetches messages since last sync.
-2. **Upload**: post any new/modified markdown documents to Dify dataset `3ac5ae85-2731-4d4c-a4e6-5590838be62e`. Dify auto-embeds with `voyage-3.5-lite`.
+2. **Upload**: post any new/modified markdown documents to Dify dataset `bc4a6ec7-8f72-4309-961d-63fa91de18c7`. Dify auto-embeds with `voyage-3.5-lite`.
 
 The pipeline is idempotent. Re-running it when nothing changed is a no-op.
 
@@ -36,19 +36,18 @@ The pipeline is idempotent. Re-running it when nothing changed is a no-op.
 
 ## How to run it
 
-Execute the export script inside the hermes-agent container:
+Single wrapper script runs both stages and reports back:
 
 ```bash
-docker exec hermes-agent bash -c "set -a; . /tmp/bb.env; set +a; EXPORT_DIR=/home/hermes/.hermes/imessage-export python3 /tmp/bb-export.py"
+docker exec hermes-agent /home/hermes/.hermes/scripts/imessage-refresh.sh
 ```
 
-Wait for it to print `sync complete`. Then upload new markdown to Dify:
+That sources credentials from `/home/hermes/.hermes/scripts/.bb-creds` (chmod 600), then runs the export pipeline followed by the Dify upload. Watch for:
 
-```bash
-docker exec hermes-agent bash -c "DIFY_DATASET_KEY=dataset-8DNEGpXMNuPuCcvA09eGhqNf DIFY_BASE_URL=https://dify.maximumgamer.com/v1 EXPORT_DIR=/home/hermes/.hermes/imessage-export python3 /tmp/bb-dify-upload.py"
-```
+- `sync complete. chats_written=N chats_skipped_shortcode=M msgs_total=K` — export done
+- `DONE  uploaded=N skipped=M failed=K` — upload done
 
-Wait for `DONE uploaded=N skipped=M`. Then it's safe to call `imessage-search`.
+After both, it's safe to call `imessage-search`. The whole thing is idempotent — re-running when nothing changed is a no-op (zero new messages, zero new uploads).
 
 ## Preflight checks before refresh
 
@@ -89,10 +88,12 @@ A full refresh can take 60-120s. If Geoff is actively chatting with you, finish 
 ```
 Source:         BlueBubbles on Mac at 192.168.68.73:1234 (HSB LAN)
 Mac account:    grt@Geoffs-MacBook-Air.local, iCloud planetix@gmail.com
-Export script:  /tmp/bb-export.py  (idempotent, incremental via .state.json)
-Export dir:     /home/hermes/.hermes/imessage-export/  (per-chat .md files)
-Upload script:  /tmp/bb-dify-upload.py
-Dify dataset:   iMessage  (id 3ac5ae85-2731-4d4c-a4e6-5590838be62e)
+Wrapper:        /home/hermes/.hermes/scripts/imessage-refresh.sh
+Creds file:     /home/hermes/.hermes/scripts/.bb-creds (600, BLUEBUBBLES_URL/PASSWORD + DIFY_*)
+Export script:  /home/hermes/.hermes/scripts/bb-export.py (idempotent, incremental via .state.json)
+Export dir:     /home/hermes/.hermes/imessage-export/ (per-chat .md files)
+Upload script:  /home/hermes/.hermes/scripts/bb-dify-upload.py
+Dify dataset:   iMessage  (id bc4a6ec7-8f72-4309-961d-63fa91de18c7)
 Embedding:      voyage-3.5-lite (free-tier cost; ~$0.01 / full refresh)
 Filter:         senders matching ^\\+?\\d{1,5}$ are excluded (shortcodes)
 ```
