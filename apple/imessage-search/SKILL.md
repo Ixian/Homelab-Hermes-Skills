@@ -1,7 +1,7 @@
 ---
 name: imessage-search
-description: Use when the user asks about anything that might be in their iMessage/SMS history — past conversations, what someone said about a topic, recalling dates/details/decisions discussed over text. Invokes the iMessage_Search Dify tool which returns relevant message excerpts from the full archive (exported via BlueBubbles, indexed in Dify). On-demand only; the archive is refreshed manually via the imessage-refresh skill.
-version: 1.0.0
+description: Use when the user asks about anything in their iMessage/SMS history. Two tools are available — iMessage_Search (semantic, Dify RAG over full archive — for TOPIC questions) and iMessage_Recent (live BlueBubbles query — for TIME-BOUNDED or recent-contact questions). Pick the right one. Semantic search cannot filter by date; live query cannot search by topic.
+version: 2.0.0
 author: Geoff
 license: MIT
 metadata:
@@ -10,97 +10,107 @@ metadata:
     related_skills: [imessage-refresh]
 ---
 
-# Search Geoff's iMessage / SMS History
+# Querying Geoff's iMessage / SMS History
 
-## Overview
+## Two tools, two different jobs
 
-Geoff's full iMessage + SMS + RCS history is exported from his Mac (via BlueBubbles) and indexed in Dify as a semantic-search dataset. This skill is your interface to that archive. When you need to answer a question that depends on what someone said over text, or when Geoff asks you to recall something from his messages, use the `iMessage_Search` tool exposed by the homelab-docs MCP.
+You have access to **two different tools** for iMessage queries. Pick the right one — they're not interchangeable.
 
-The archive includes ~52,000 messages across ~880 chats. Senders that look like SMS shortcodes (3-5 digit numbers — 2FA codes, delivery alerts, promotional shortcodes) are excluded.
+### `iMessage_Search` — Dify semantic search
 
-## When to Use
+- **Use for TOPIC questions** across all history: "what did Anne say about the trip", "when did we discuss the pool", "find the address Sarah sent me"
+- Returns top semantic-search chunks ranked by topical similarity to the query
+- Covers the FULL archive (~52k messages, ~881 chats, ~902 documents — large chats split per-year)
+- Indexed in Dify with voyage-3.5-lite embeddings
+- **CANNOT filter by date.** Semantic search ranks by content similarity, not recency. Asking for "this week" or "recent" will return whatever's topically similar regardless of when sent.
+- Args: `query` (natural language topic)
 
-- "What did Anne say about the trip?"
-- "Did I tell my mom about X?"
-- "When did I last text Bob about the pool?"
-- "Find the address Sarah sent me"
-- Any question where the natural source of the answer is Geoff's text history
-- Cross-reference questions: "What's the dinner reservation time? Check my texts."
+### `iMessage_Recent` — Live BlueBubbles query
 
-## Don't Use For
+- **Use for TIME-BOUNDED questions about a specific contact**: "what did Sandra text this week", "most recent messages from Bob", "did Anne text me today", "show me my last 20 messages with Mom"
+- Hits BlueBubbles directly (no Dify) and pulls actual messages in chronological order
+- Resolves the contact by name against Geoff's address book (66 contacts, partial name match OK if unique)
+- Returns messages newest-first with timestamps and sender names
+- **CANNOT search by topic.** It pulls ALL recent messages from the chat; you'll need to read them and find what matters.
+- Args: `contact` (name, required), `days_back` (default 7, max 60), `limit` (default 50, max 200)
+- Latency: ~3s first call (chat-list scan), ~0.5s for subsequent calls within 5 min (cached)
 
-- Anything you can answer from your own context or other tools (HA, file system, web search) without invoking the message archive — don't pollute response with iMessage chunks unprompted
+## Decision rules
+
+| Question shape | Tool | Why |
+|---|---|---|
+| "What did X say about Y?" | `iMessage_Search` | Topic-driven |
+| "When did we talk about Z?" | `iMessage_Search` | Topic-driven |
+| "Find the address/phone/link X sent" | `iMessage_Search` | Topic-driven |
+| "What did X text this week / today / recently?" | `iMessage_Recent` | Date-bounded |
+| "Show me my last N messages with X" | `iMessage_Recent` | Recency-bounded |
+| "Did X text me about Y today?" | `iMessage_Recent` THEN scan for Y | Date + topic — date filter first |
+| "What's the dinner reservation time?" | `iMessage_Search` first; if no recent hits, `iMessage_Recent` | Topic primary |
+| "Catch me up on X" | `iMessage_Recent` (broader days_back) | Recency-driven |
+
+When in doubt: if the question mentions a TIME WINDOW (today, this week, recently, last N days), use `iMessage_Recent`. If it's about a TOPIC across time, use `iMessage_Search`. **Never use `iMessage_Search` for "this week" — it cannot filter by date.**
+
+## When NOT to use either
+
+- Anything you can answer from your own context or other tools (HA, file system, web search) without invoking message history — don't pollute responses with iMessage chunks unprompted
 - Anything Geoff explicitly says NOT to look at — respect "don't read my texts" type instructions
-- Group-wide questions where you'd be exposing one person's messages to a discussion involving someone else; pause and confirm
+- Group-wide questions where you'd expose one person's messages in a discussion that includes others; pause and confirm
 
-## How to invoke
-
-The `iMessage_Search` tool (under the `homelab-docs` MCP) takes a single `query` argument — natural language. Examples:
-
-```
-iMessage_Search(query="Anne trip planning Thanksgiving")
-iMessage_Search(query="pool pump rpm what did Bob say")
-iMessage_Search(query="dinner reservation address Saturday")
-```
-
-The tool returns up to 8 message excerpts (semantic-search, top-k=8) with chat names and similarity scores. Each excerpt is a chunk from one chat's markdown export.
-
-## Interpreting results
+## Interpreting `iMessage_Search` results
 
 Each excerpt is formatted like:
 
 ```
---- Excerpt 1 (chat: Anne_Smith__chat<guid>, score: 0.72) ---
-**2026-04-12 18:30** `anne@icloud.com`: <message text>
-**2026-04-12 18:31** `me`: <reply>
+--- Excerpt 1 (chat: Sandra_Tognetti__2024__-__15124842106, score: 0.72) ---
+**2024-06-12 18:30** `Sandra Tognetti (+15124842106)`: <message>
+**2024-06-12 18:31** `me`: <reply>
+```
+
+- **score** is semantic similarity, ~0.4-0.85. Above 0.6 is usually relevant.
+- **chat name** is `<participant_name>__<year-if-split>__<chat-guid>` — recent chats from large conversations have a year suffix; small chats don't.
+- **sender labels**: `me` = Geoff. Other senders have their real name resolved from his address book (e.g. `Sandra Tognetti (+15124842106)`).
+
+## Interpreting `iMessage_Recent` results
+
+Cleaner format, newest-first:
+
+```
+Last 12 message(s) with Sandra Tognetti (last 7 day(s), newest first):
+
+**2026-05-14 16:36** `me`: I booked everything...
+**2026-05-14 16:23** `Sandra Tognetti`: Did you want to do a couples massage...
 ...
 ```
 
-- **score** is the Dify semantic similarity score, typically 0.4-0.85. Above ~0.6 is usually relevant; below ~0.4 may be a stretch.
-- **chat name** is `<participant>__<chat-guid>` — useful for telling apart multiple conversations with similar topics.
-- **sender labels**: `me` = Geoff, otherwise the phone/email/handle.
-- **timestamps** are in Geoff's local timezone (Central, America/Chicago).
-
-When multiple excerpts come back, prefer recent + high-score. If the question is about a specific person, prioritize excerpts from chats where that person is a participant (chat name will hint).
-
-## Refining queries
-
-The retrieval is semantic, not keyword. Better queries describe the *topic* rather than the exact words.
-
-- ❌ "find text containing 'meet at 3'"  → too narrow
-- ✓ "scheduling a meeting time with Sarah this week"
-
-If first result is empty or weak, try:
-1. Broaden the topic ("Anne trip" instead of "Thanksgiving 2026 Anne flight 1132")
-2. Try a different angle ("Anne planning travel" instead of "Anne airport")
-3. Try the contact's name + the rough topic in one query
+- Senders are real names (already resolved). `me` = Geoff.
+- If the response says "No 1:1 chat with X found", they may only be in group chats — `iMessage_Search` with their name is the fallback.
+- If the response says "matches multiple contacts", you need a more specific name.
 
 ## Pitfalls
 
-### Staleness
-The Dify index is only as fresh as the last `imessage-refresh` run. There's no auto-sync. If Geoff asks about a very recent message, suggest running `imessage-refresh` first.
+### Don't use `iMessage_Search` for date-bounded questions
+The old version of this skill conflated the two. Semantic search returning older chunks for "this week" queries is the #1 way to look stupid. Use `iMessage_Recent` for anything time-bounded.
 
-### Privacy: don't paraphrase sensitive content unprompted
-Excerpts can contain personal/financial/medical info. When summarizing or quoting back, lean toward minimum-necessary: answer the actual question, don't dump the full excerpt unless Geoff asked to see it.
+### Group chats aren't in `iMessage_Recent`'s 1:1 lookup
+`iMessage_Recent` finds 1:1 conversations only. For "what did Sandra say in the family group chat this week," use `iMessage_Search` with her name + the group context as the query.
 
-### Shortcodes excluded by design
-2FA codes, USPS/FedEx delivery alerts, "STOP to opt out" promos are NOT in the index. Don't suggest the index can answer "what was that 2FA code from Amazon?" — it can't.
+### Cache TTL is 5 min
+Contact list and chat-index are cached in mcp-dify memory for 5 minutes. If a new contact was just added on the Mac, it might not be visible for up to 5 minutes. Rare edge case.
 
-### Chat names can be cryptic
-For group chats or unnamed conversations, the chat name will be a long string of phone numbers. The excerpts themselves show senders clearly though.
+### `iMessage_Search` is only as fresh as the last `imessage-refresh` run
+The Dify index isn't auto-synced. New messages don't appear in `iMessage_Search` until refresh. `iMessage_Recent` is always live.
 
 ### Geoff dislikes verbose preambles
-Don't say "Let me search your iMessages..." then dump results. Just answer the question and cite an excerpt if needed.
+Don't say "Let me search your iMessages..." then dump results. Just answer.
 
 ## Quick reference
 
 ```
-Tool:           iMessage_Search (via homelab-docs MCP)
-Input:          query: string (natural language)
-Output:         Top-8 semantic-search excerpts, raw markdown chunks
-Dataset id:     bc4a6ec7-8f72-4309-961d-63fa91de18c7 (Dify, "iMessage")
-Refresh:        Manual via imessage-refresh skill
-Source:         BlueBubbles on Geoff's Mac (HSB, 192.168.68.73)
-Excludes:       3-5 digit shortcode senders (2FA / promos / delivery)
-Volume:         ~52k messages, ~880 chats
+TOPIC across years:           iMessage_Search(query="...")
+RECENT from specific person:  iMessage_Recent(contact="Name", days_back=7)
+Both available via:           homelab-docs MCP
+Backend (Search):             Dify dataset c9765049-..., voyage-3.5-lite
+Backend (Recent):             BlueBubbles REST @ 192.168.68.73:1234 (live)
+Source corpus:                ~52k messages, ~881 chats from Geoff's Mac
+Excludes:                     3-5 digit shortcode senders (2FA/promos)
 ```
